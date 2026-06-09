@@ -9,6 +9,74 @@ results never leak across requests.
 This is **not** a persistent cache (no Redis/file). It only dedupes identical
 queries (same SQL + same bindings) within a single request lifecycle.
 
+## Why would I want this?
+
+The single best use case is **a query you run to validate input that you then
+need again downstream.**
+
+Validation rules and controllers naturally re-express the same query. A rule
+fetches a row to check it exists / is in the right state; then the controller
+(or service) fetches that same row to actually do the work. That's two identical
+round trips to the database for one logical lookup.
+
+The usual workarounds are awkward: smuggle the already-fetched model out of the
+rule into the controller, or skip the rule and re-validate inline in the
+controller. With `firstCached()`/`getCached()` you don't have to. Both layers
+just write the natural query — identical SQL + bindings hit the database once,
+and the controller gets the row the rule already loaded.
+
+The goal: **zero validation in the controller/service layer** — validation stays
+in the rule where it belongs, and the controller reuses the query for free.
+
+### Example: a custom rule and a controller sharing one query
+
+A vanilla Laravel validation rule that runs a query:
+
+```php
+use Closure;
+use Illuminate\Contracts\Validation\ValidationRule;
+
+class PendingInvitation implements ValidationRule
+{
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        $invitation = UserInvitation::where('activation_token', $value)
+            ->whereNull('redeemed_at')
+            ->firstCached();
+
+        if (! $invitation) {
+            $fail('This invitation is invalid or has already been used.');
+        }
+    }
+}
+```
+
+The controller validates, then reuses the **exact same query** — no second DB hit,
+no model smuggled out of the rule, no inline re-validation:
+
+```php
+public function store(Request $request)
+{
+    $request->validate([
+        'token' => ['required', new PendingInvitation],
+    ]);
+
+    // Identical SQL + bindings → served from the per-request cache.
+    $invitation = UserInvitation::where('activation_token', $request->token)
+        ->whereNull('redeemed_at')
+        ->firstCached();
+
+    $invitation->redeem($request->user());
+
+    return response()->json($invitation);
+}
+```
+
+The rule has already done the DB work; the controller's query resolves from the
+in-memory store. The only requirement is that both queries are identical — same
+`where`/`whereNull` clauses in the same order, so they produce the same SQL and
+bindings.
+
 ## Installation
 
 ```bash
