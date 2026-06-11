@@ -1,13 +1,16 @@
 # Laravel Request Query Cache
 
-Per-request, in-memory deduplication for Eloquent queries. Adds two query-builder
-macros — `firstCached()` and `getCached()` — that run a given query against the
-database **once per request** and serve every subsequent identical query from an
-in-memory store. The store is flushed automatically when the request ends, so
-results never leak across requests.
+A request caching toolkit for Laravel with two independent features:
 
-This is **not** a persistent cache (no Redis/file). It only dedupes identical
-queries (same SQL + same bindings) within a single request lifecycle.
+1. **Per-request query deduplication** — `firstCached()` / `getCached()` macros
+   that run a query **once per request** and serve identical repeats from an
+   in-memory store flushed when the request ends. *(Not a persistent cache.)*
+2. **Idempotent HTTP responses** — an `idempotent` middleware that replays the
+   stored response for a repeated `Idempotency-Key` instead of executing the
+   route again. *(Persistent: uses your configured cache store.)*
+
+The two share nothing but the package — pick either, or both. Query dedup needs
+no config; idempotency is opt-in per route.
 
 ## Why would I want this?
 
@@ -125,6 +128,99 @@ Because results are memoized on SQL + bindings, if you write to a row and then
 re-query it with `firstCached()`/`getCached()` in the **same request**, you get
 the pre-write cached value. Use the uncached `first()`/`get()` after a write you
 need to read back in-request.
+
+## Idempotent HTTP responses
+
+State-changing endpoints (payments, orders, sign-ups) get retried — by impatient
+users, flaky networks, and queue workers. The `idempotent` middleware makes those
+retries safe: the client sends a unique `Idempotency-Key` header, and any repeat
+of that key replays the **original** response instead of running the route twice.
+
+```php
+use App\Http\Controllers\PaymentController;
+
+Route::post('/payments', [PaymentController::class, 'store'])
+    ->middleware('idempotent');
+```
+
+```http
+POST /payments
+Idempotency-Key: 7f3c…              # client-generated, unique per logical operation
+
+→ first call:  runs the controller, stores the response
+→ same key:    replays the stored response  (+ Idempotency-Replayed: true)
+```
+
+### How a request is handled
+
+1. Only `POST`/`PUT`/`PATCH` are guarded (configurable). Everything else passes through.
+2. No key present → `400` if the route requires it, otherwise passes through.
+3. Key seen before, **same** request → the stored response is replayed.
+4. Key seen before, **different** request body → `422` (the key was reused for
+   something else — a client bug you want surfaced, not silently mishandled).
+5. Key currently **in flight** (a concurrent duplicate) → `409` + `Retry-After: 1`.
+   An atomic lock guarantees the route body runs at most once even under a
+   simultaneous double-submit.
+
+A request's identity (its *fingerprint*) is the HTTP method + route + query string
++ body. Body field order doesn't matter — `{"a":1,"b":2}` and `{"b":2,"a":1}`
+are the same request. The key is namespaced by **scope** so two users can use the
+same key without colliding.
+
+### Per-route overrides
+
+Override `ttl`, `required`, and `scope` inline — `idempotent:{ttl},{required},{scope}`:
+
+```php
+// 24h window, header mandatory, scoped per authenticated user
+Route::post('/payments', …)->middleware('idempotent:86400,true,user');
+
+// 5-minute window, optional, global (one key space for everyone)
+Route::post('/webhooks/stripe', …)->middleware('idempotent:300,false,global');
+```
+
+### Configuration
+
+Defaults work out of the box. To customize, publish the config:
+
+```bash
+php artisan vendor:publish --tag=request-query-cache-config
+```
+
+```php
+// config/request-query-cache.php → 'idempotency'
+'enabled'      => true,
+'store'        => null,              // null = default cache store
+'header'       => 'Idempotency-Key',
+'ttl'          => 86400,            // seconds a response stays replayable (24h)
+'required'     => false,            // 400 when the header is missing
+'scope'        => 'user',           // user | ip | global
+'lock_timeout' => 10,              // seconds the in-flight lock is held
+'methods'      => ['POST', 'PUT', 'PATCH'],
+'replay_header'=> 'Idempotency-Replayed',  // null to disable
+```
+
+**TTL guidance:** default to 24h for money/order endpoints (a retry hours later
+must not double-charge — same window Stripe uses); drop to minutes for cheap,
+high-volume endpoints.
+
+### Requirements & caveats
+
+- **The cache store must support atomic locks** — `redis`, `memcached`,
+  `dynamodb`, `database`, `file`, or `array`. Set a specific store via the
+  `store` config key if your default doesn't. (If the store can't lock, the
+  middleware still replays but loses the concurrent-duplicate `409` guarantee.)
+- **`5xx` responses are never stored** — a transient server error must re-execute
+  on retry, not replay forever. `2xx`–`4xx` responses are stored.
+- **Body-sensitive by design** — reusing a key with a changed payload is a `422`,
+  not a silent overwrite. That's the safety guarantee.
+- Streamed/binary (non-string-body) responses are passed through unstored.
+
+The middleware also exposes `$request->attributes->get('idempotent')` (bool) and
+`'idempotency-key'` to downstream code.
+
+> **Note:** attribute-style usage (`#[Idempotent]` on a controller method) is not
+> wired up yet — use the `idempotent` middleware alias or class for now.
 
 ## Testing
 

@@ -1,15 +1,18 @@
 {
     "name": "langsys/laravel-request-query-cache",
-    "description": "Per-request in-memory deduplication for Eloquent queries via firstCached() and getCached() macros.",
+    "description": "Request caching toolkit for Laravel: per-request Eloquent query deduplication (firstCached/getCached) plus idempotent HTTP responses via the idempotent middleware.",
     "type": "library",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "keywords": [
         "laravel",
         "eloquent",
         "query",
         "cache",
         "memoize",
-        "per-request"
+        "per-request",
+        "idempotency",
+        "idempotent",
+        "middleware"
     ],
     "license": "MIT",
     "authors": [
