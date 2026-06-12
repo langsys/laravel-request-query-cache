@@ -2,7 +2,6 @@
     "name": "langsys/laravel-request-query-cache",
     "description": "Request caching toolkit for Laravel: per-request Eloquent query deduplication (firstCached/getCached) plus idempotent HTTP responses via the idempotent middleware.",
     "type": "library",
-    "version": "1.0.0",
     "keywords": [
         "laravel",
         "eloquent",
