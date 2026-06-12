@@ -20,6 +20,7 @@ final class IdempotencyOptions
         public readonly int $ttl,
         public readonly bool $required,
         public readonly IdempotencyScope $scope,
+        public readonly string $scopeAttribute,
         public readonly int $lockTimeout,
         public readonly array $methods,
         public readonly ?string $replayHeader,
@@ -44,6 +45,7 @@ final class IdempotencyOptions
                 ? filter_var($required, FILTER_VALIDATE_BOOL)
                 : (bool) ($config['required'] ?? false),
             scope: IdempotencyScope::from($scope ?? (string) ($config['scope'] ?? 'user')),
+            scopeAttribute: (string) ($config['scope_attribute'] ?? 'api_key_id'),
             lockTimeout: (int) ($config['lock_timeout'] ?? 10),
             methods: array_map('strtoupper', (array) ($config['methods'] ?? ['POST', 'PUT', 'PATCH'])),
             replayHeader: ($config['replay_header'] ?? null) ?: null,

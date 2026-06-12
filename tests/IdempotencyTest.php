@@ -2,6 +2,7 @@
 
 namespace Langsys\RequestQueryCache\Tests;
 
+use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -50,6 +51,21 @@ class IdempotencyTest extends TestCase
             self::$handlerCalls++;
 
             return response()->json(['boom' => true], 500);
+        })->middleware('idempotent:60,false,global');
+
+        // apikey scope: a leading middleware stamps the tenant id the way an
+        // application's API-key auth middleware would.
+        $router->post('/idem/apikey', function () {
+            self::$handlerCalls++;
+
+            return response()->json(['calls' => self::$handlerCalls]);
+        })->middleware([StampTenantMiddleware::class, 'idempotent:60,false,apikey']);
+
+        // Path-parameterised route: proves route params are part of the fingerprint.
+        $router->post('/idem/resource/{id}', function () {
+            self::$handlerCalls++;
+
+            return response()->json(['calls' => self::$handlerCalls]);
         })->middleware('idempotent:60,false,global');
     }
 
@@ -123,6 +139,39 @@ class IdempotencyTest extends TestCase
         $this->assertSame(2, self::$handlerCalls, 'A 5xx must re-execute on retry, not replay');
     }
 
+    public function testApiKeyScopeIsolatesTenantsSharingAKey(): void
+    {
+        $first = $this->withHeaders(['Idempotency-Key' => 'shared', 'X-Api-Key-Id' => 'tenant-a'])
+            ->postJson('/idem/apikey', ['a' => 1]);
+        $second = $this->withHeaders(['Idempotency-Key' => 'shared', 'X-Api-Key-Id' => 'tenant-b'])
+            ->postJson('/idem/apikey', ['a' => 1]);
+
+        $first->assertOk();
+        $second->assertOk();
+        $second->assertHeaderMissing('Idempotency-Replayed');
+        $this->assertSame(2, self::$handlerCalls, 'Different API keys must not share a namespace');
+    }
+
+    public function testApiKeyScopeReplaysWithinTheSameTenant(): void
+    {
+        $first = $this->withHeaders(['Idempotency-Key' => 'shared', 'X-Api-Key-Id' => 'tenant-a'])
+            ->postJson('/idem/apikey', ['a' => 1]);
+        $second = $this->withHeaders(['Idempotency-Key' => 'shared', 'X-Api-Key-Id' => 'tenant-a'])
+            ->postJson('/idem/apikey', ['a' => 1]);
+
+        $first->assertOk();
+        $second->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+        $this->assertSame(1, self::$handlerCalls, 'Same key + same tenant must replay');
+    }
+
+    public function testSameKeyOnDifferentRouteParamsReturns422(): void
+    {
+        $this->withHeader('Idempotency-Key', 'k')->postJson('/idem/resource/1', ['a' => 1])->assertOk();
+        $this->withHeader('Idempotency-Key', 'k')->postJson('/idem/resource/2', ['a' => 1])->assertStatus(422);
+
+        $this->assertSame(1, self::$handlerCalls, 'Reusing a key across resources is misuse, not a replay');
+    }
+
     public function testConcurrentInFlightKeyReturns409(): void
     {
         $storageKey = 'idempotency:global:global:' . hash('xxh128', 'locktest');
@@ -138,5 +187,16 @@ class IdempotencyTest extends TestCase
         $this->assertSame(0, self::$handlerCalls);
 
         $held->release();
+    }
+}
+
+/** Stands in for an application's API-key auth middleware: stamps the tenant id. */
+class StampTenantMiddleware
+{
+    public function handle(Request $request, Closure $next)
+    {
+        $request->attributes->set('api_key_id', $request->header('X-Api-Key-Id'));
+
+        return $next($request);
     }
 }

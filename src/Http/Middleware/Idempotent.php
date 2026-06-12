@@ -50,7 +50,7 @@ class Idempotent
         }
 
         $store = Cache::store($options->store);
-        $scopeId = $this->scopeId($request, $options->scope);
+        $scopeId = $this->scopeId($request, $options);
         $storageKey = $fingerprinter->storageKey($clientKey, $scopeId);
         $fingerprint = $fingerprinter->fingerprint();
 
@@ -131,14 +131,27 @@ class Idempotent
         return $response;
     }
 
-    private function scopeId(Request $request, IdempotencyScope $scope): string
+    private function scopeId(Request $request, IdempotencyOptions $options): string
     {
-        return match ($scope) {
+        return match ($options->scope) {
             IdempotencyScope::GlobalScope => 'global',
             IdempotencyScope::Ip => 'ip:' . $request->ip(),
-            IdempotencyScope::User => $request->user() !== null
-                ? 'user:' . $request->user()->getAuthIdentifier()
-                : 'ip:' . $request->ip(),
+            IdempotencyScope::ApiKey => ($apiKeyId = $request->attributes->get($options->scopeAttribute)) !== null
+                ? 'apikey:' . $apiKeyId
+                : $this->userScopeId($request),
+            IdempotencyScope::User => $this->userScopeId($request),
         };
+    }
+
+    /**
+     * Authenticated user when present, otherwise the client IP. Also the fallback
+     * for the apikey scope when the application has not populated the configured
+     * scope attribute on the request.
+     */
+    private function userScopeId(Request $request): string
+    {
+        return $request->user() !== null
+            ? 'user:' . $request->user()->getAuthIdentifier()
+            : 'ip:' . $request->ip();
     }
 }
