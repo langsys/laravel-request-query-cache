@@ -37,9 +37,16 @@ return [
         // middleware parameter (e.g. 'idempotent:86400,true,user').
         'required' => false,
 
-        // Namespacing scope for stored keys: user | ip | global.
+        // Namespacing scope for stored keys: user | ip | global | apikey.
         // 'user' falls back to the request IP when there is no authenticated user.
+        // 'apikey' isolates per tenant for API-key auth (no session user); it reads
+        // the request attribute named below and falls back to user/ip when absent.
         'scope' => 'user',
+
+        // Request attribute the 'apikey' scope reads for the tenant identifier.
+        // The application's auth middleware must set it, e.g.
+        //   $request->attributes->set('api_key_id', $apiKey->id);
+        'scope_attribute' => 'api_key_id',
 
         // Seconds the atomic in-flight lock is held while the route runs. A
         // second identical key arriving mid-flight gets 409 + Retry-After.

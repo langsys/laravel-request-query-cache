@@ -162,10 +162,27 @@ Idempotency-Key: 7f3c…              # client-generated, unique per logical ope
    An atomic lock guarantees the route body runs at most once even under a
    simultaneous double-submit.
 
-A request's identity (its *fingerprint*) is the HTTP method + route + query string
-+ body. Body field order doesn't matter — `{"a":1,"b":2}` and `{"b":2,"a":1}`
-are the same request. The key is namespaced by **scope** so two users can use the
-same key without colliding.
+A request's identity (its *fingerprint*) is the HTTP method + route + path
+parameters + query string + body. Body field order doesn't matter —
+`{"a":1,"b":2}` and `{"b":2,"a":1}` are the same request. Reusing one key across
+different path parameters (e.g. `/projects/A` vs `/projects/B`) is treated as
+misuse and returns `422`. The key is namespaced by **scope** so two callers can
+use the same key without colliding.
+
+**Scopes** — `user | ip | global | apikey`:
+
+- `user` — per authenticated user; falls back to the request IP when there is no
+  session user.
+- `ip` — per client IP.
+- `global` — one key space shared by everyone.
+- `apikey` — per tenant for API-key auth (where there is no session user). It reads
+  the request attribute named by `scope_attribute` (default `api_key_id`), which
+  your auth middleware sets, and falls back to user/IP when that attribute is
+  absent:
+  ```php
+  // in your API-key auth middleware, before the idempotent middleware runs
+  $request->attributes->set('api_key_id', $apiKey->id);
+  ```
 
 ### Per-route overrides
 
@@ -177,6 +194,9 @@ Route::post('/payments', …)->middleware('idempotent:86400,true,user');
 
 // 5-minute window, optional, global (one key space for everyone)
 Route::post('/webhooks/stripe', …)->middleware('idempotent:300,false,global');
+
+// 1h window, optional, per API-key tenant (SDK endpoints with no session user)
+Route::post('/translate', …)->middleware('idempotent:3600,false,apikey');
 ```
 
 ### Configuration
@@ -194,7 +214,8 @@ php artisan vendor:publish --tag=request-query-cache-config
 'header'       => 'Idempotency-Key',
 'ttl'          => 86400,            // seconds a response stays replayable (24h)
 'required'     => false,            // 400 when the header is missing
-'scope'        => 'user',           // user | ip | global
+'scope'        => 'user',           // user | ip | global | apikey
+'scope_attribute' => 'api_key_id', // request attribute the apikey scope reads
 'lock_timeout' => 10,              // seconds the in-flight lock is held
 'methods'      => ['POST', 'PUT', 'PATCH'],
 'replay_header'=> 'Idempotency-Replayed',  // null to disable

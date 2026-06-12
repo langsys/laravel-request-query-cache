@@ -44,9 +44,18 @@ final class RequestFingerprint
             ? ($route->getName() ?: $route->uri())
             : $this->request->path();
 
+        // Path parameters (e.g. {project}, {organization}) are part of request
+        // identity but live neither in the URI template nor in $request->all().
+        // originalParameters() yields the raw URL values before model binding.
+        $routeParameters = $route && method_exists($route, 'originalParameters')
+            ? $route->originalParameters()
+            : [];
+        ksort($routeParameters);
+
         return hash('xxh128', implode('|', [
             strtoupper($this->request->method()),
             $routeIdentity,
+            (string) json_encode($routeParameters),
             (string) $this->request->getQueryString(),
             $this->bodyHash(),
             (string) $this->request->getContentTypeFormat(),
