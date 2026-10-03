@@ -53,6 +53,13 @@ class IdempotencyTest extends TestCase
             return response()->json(['boom' => true], 500);
         })->middleware('idempotent:60,false,global');
 
+        // POST that acted and then failed: with storeServerErrors its 5xx is final.
+        $router->post('/idem/charge', function () {
+            self::$handlerCalls++;
+
+            return response()->json(['calls' => self::$handlerCalls], 502);
+        })->middleware('idempotent:60,false,global,true');
+
         // apikey scope: a leading middleware stamps the tenant id the way an
         // application's API-key auth middleware would.
         $router->post('/idem/apikey', function () {
@@ -137,6 +144,15 @@ class IdempotencyTest extends TestCase
         $this->withHeader('Idempotency-Key', 'fail')->postJson('/idem/fail', ['a' => 1])->assertStatus(500);
 
         $this->assertSame(2, self::$handlerCalls, 'A 5xx must re-execute on retry, not replay');
+    }
+
+    public function testServerErrorsAreReplayedWhenTheRouteStoresThem(): void
+    {
+        $this->withHeader('Idempotency-Key', 'charge')->postJson('/idem/charge', ['a' => 1])->assertStatus(502);
+        $replay = $this->withHeader('Idempotency-Key', 'charge')->postJson('/idem/charge', ['a' => 1]);
+
+        $replay->assertStatus(502)->assertJson(['calls' => 1])->assertHeader('Idempotency-Replayed', 'true');
+        $this->assertSame(1, self::$handlerCalls, 'A route that stores 5xx must never run twice for one key');
     }
 
     public function testApiKeyScopeIsolatesTenantsSharingAKey(): void

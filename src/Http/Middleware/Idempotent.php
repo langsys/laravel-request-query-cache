@@ -21,6 +21,7 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
  * Usage:
  *   ->middleware('idempotent')
  *   ->middleware('idempotent:86400,true,user')   // ttl, required, scope overrides
+ *   ->middleware('idempotent:86400,false,user,true')   // ...and store 5xx answers too
  */
 class Idempotent
 {
@@ -30,8 +31,9 @@ class Idempotent
         ?string $ttl = null,
         ?string $required = null,
         ?string $scope = null,
+        ?string $storeServerErrors = null,
     ): Response {
-        $options = IdempotencyOptions::resolve($ttl, $required, $scope);
+        $options = IdempotencyOptions::resolve($ttl, $required, $scope, $storeServerErrors);
 
         // Disabled, or a verb we don't guard (e.g. GET) — straight through.
         if (! $options->enabled || ! in_array(strtoupper($request->method()), $options->methods, true)) {
@@ -84,9 +86,11 @@ class Idempotent
 
             $response = $next($request);
 
-            // Persist final responses only — never cache a transient 5xx, and skip
-            // streamed/binary bodies we can't faithfully replay.
-            if ($response->getStatusCode() < 500 && $response->getContent() !== false) {
+            // A 5xx is normally transient and re-executes on retry. Where the route may
+            // have acted before failing (a charge, say), storeServerErrors makes every
+            // answer final. Streamed/binary bodies can't be replayed faithfully.
+            $isFinal = $options->storeServerErrors || $response->getStatusCode() < 500;
+            if ($isFinal && $response->getContent() !== false) {
                 $store->put(
                     $storageKey,
                     StoredResponse::fromResponse($fingerprint, $response)->toArray(),

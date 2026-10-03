@@ -24,14 +24,15 @@ final class IdempotencyOptions
         public readonly int $lockTimeout,
         public readonly array $methods,
         public readonly ?string $replayHeader,
+        public readonly bool $storeServerErrors,
     ) {
     }
 
     /**
      * Resolve options from config, applying optional per-route overrides passed
-     * as middleware parameters: 'idempotent:{ttl},{required},{scope}'.
+     * as middleware parameters: 'idempotent:{ttl},{required},{scope},{storeServerErrors}'.
      */
-    public static function resolve(?string $ttl = null, ?string $required = null, ?string $scope = null): self
+    public static function resolve(?string $ttl = null, ?string $required = null, ?string $scope = null, ?string $storeServerErrors = null): self
     {
         /** @var array<string, mixed> $config */
         $config = config('request-query-cache.idempotency', []);
@@ -49,6 +50,9 @@ final class IdempotencyOptions
             lockTimeout: (int) ($config['lock_timeout'] ?? 10),
             methods: array_map('strtoupper', (array) ($config['methods'] ?? ['POST', 'PUT', 'PATCH'])),
             replayHeader: ($config['replay_header'] ?? null) ?: null,
+            storeServerErrors: $storeServerErrors !== null
+                ? filter_var($storeServerErrors, FILTER_VALIDATE_BOOL)
+                : (bool) ($config['store_server_errors'] ?? false),
         );
     }
 }

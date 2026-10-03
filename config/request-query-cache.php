@@ -59,6 +59,12 @@ return [
         // cached replay from a fresh execution. Set to null to disable.
         'replay_header' => 'Idempotency-Replayed',
 
+        // When true, 5xx answers are stored and replayed like any other, so a retry
+        // never runs the route again. For routes whose work may already have
+        // happened when they fail, such as charging a card. Usually set per route:
+        // 'idempotent:86400,false,user,true'.
+        'store_server_errors' => false,
+
     ],
 
 ];

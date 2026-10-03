@@ -186,7 +186,7 @@ use the same key without colliding.
 
 ### Per-route overrides
 
-Override `ttl`, `required`, and `scope` inline — `idempotent:{ttl},{required},{scope}`:
+Override `ttl`, `required`, `scope` and `storeServerErrors` inline — `idempotent:{ttl},{required},{scope},{storeServerErrors}`:
 
 ```php
 // 24h window, header mandatory, scoped per authenticated user
@@ -197,6 +197,9 @@ Route::post('/webhooks/stripe', …)->middleware('idempotent:300,false,global');
 
 // 1h window, optional, per API-key tenant (SDK endpoints with no session user)
 Route::post('/translate', …)->middleware('idempotent:3600,false,apikey');
+
+// A charge: every answer is final, 5xx included, so a retry never charges twice
+Route::post('/checkout', …)->middleware('idempotent:86400,false,user,true');
 ```
 
 ### Configuration
@@ -219,6 +222,7 @@ php artisan vendor:publish --tag=request-query-cache-config
 'lock_timeout' => 10,              // seconds the in-flight lock is held
 'methods'      => ['POST', 'PUT', 'PATCH'],
 'replay_header'=> 'Idempotency-Replayed',  // null to disable
+'store_server_errors' => false,    // true: store and replay 5xx answers too
 ```
 
 **TTL guidance:** default to 24h for money/order endpoints (a retry hours later
@@ -231,8 +235,10 @@ high-volume endpoints.
   `dynamodb`, `database`, `file`, or `array`. Set a specific store via the
   `store` config key if your default doesn't. (If the store can't lock, the
   middleware still replays but loses the concurrent-duplicate `409` guarantee.)
-- **`5xx` responses are never stored** — a transient server error must re-execute
-  on retry, not replay forever. `2xx`–`4xx` responses are stored.
+- **`5xx` responses are not stored by default** — a transient server error
+  re-executes on retry. `2xx`–`4xx` responses are stored. A route whose work may
+  already be done when it fails (charging a card) sets `storeServerErrors`, and
+  then every answer, `5xx` included, is replayed.
 - **Body-sensitive by design** — reusing a key with a changed payload is a `422`,
   not a silent overwrite. That's the safety guarantee.
 - Streamed/binary (non-string-body) responses are passed through unstored.
